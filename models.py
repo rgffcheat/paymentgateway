@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, LargeBinary
+from sqlalchemy import String, Integer, Boolean, DateTime, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from db import Base
 def now(): return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -18,7 +18,7 @@ class User(Base):
     business_type: Mapped[str] = mapped_column(String(40), default="")
     gstin: Mapped[str] = mapped_column(String(20), default="")
     address: Mapped[str] = mapped_column(Text, default="")
-    photo_b64: Mapped[str] = mapped_column(Text, default="", deferred=True)  # big: never load on every request
+    photo_b64: Mapped[str] = mapped_column(Text, default="")
     photo_mime: Mapped[str] = mapped_column(String(20), default="")
     photo_v: Mapped[int] = mapped_column(Integer, default=0)
     trial_used: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -182,14 +182,4 @@ class Broadcast(Base):
     message: Mapped[str] = mapped_column(String(300))
     audience: Mapped[str] = mapped_column(String(40), default="all")
     count: Mapped[int] = mapped_column(Integer, default=0)
-    created: Mapped[datetime] = mapped_column(DateTime, default=now)
-class MusicTrack(Base):  # owner-uploaded background music; audio bytes live in the database so they survive redeploys
-    __tablename__ = "music_tracks"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    title: Mapped[str] = mapped_column(String(120))
-    mime: Mapped[str] = mapped_column(String(60), default="audio/mpeg")
-    size: Mapped[int] = mapped_column(Integer, default=0)
-    data: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
-    sort: Mapped[int] = mapped_column(Integer, default=0)
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
     created: Mapped[datetime] = mapped_column(DateTime, default=now)

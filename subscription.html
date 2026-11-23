@@ -13,10 +13,10 @@
 {% if owner %}<div class="card"><h3>Owner account</h3><p class="mut">The owner has full access to every gateway. Set plan prices, the free trial and broadcasts from the Owner Panel.</p><a class="btn" href="/admin/subscriptions">Plans &amp; pricing</a></div>{% endif %}
 {% if pend %}<div class="ban">You have an unpaid plan order. <a href="/pay/{{pend.pay_id}}">Complete payment &rarr;</a></div>{% endif %}
 <div class="card pc ac">{% if sub %}<span class="pill SUCCESS">Active</span><h2>{{plan.name}}</h2><p class="mut" style="font-size:14px;margin:0 0 14px">{{desc}}</p>
-<p class="rt">{{left}}{% if sub.end %}<b>{{(sub.end|ist).strftime('%d %b %Y')}}</b>{% endif %}</p>
+<p class="rt">{{left}}{% if sub.end %}<b>{{sub.end.strftime('%d %b %Y')}}</b>{% endif %}</p>
 {% if credit %}<p class="mut" style="margin:6px 0 0">Switching plans applies {{credit|rs}} credit for unused days.</p>{% endif %}
 {% else %}<span class="pill EXPIRED">No active plan</span><h2>{{ 'Plan expired' if last else 'Choose a plan' }}</h2>
-<p class="mut" style="font-size:14px;margin:0">{% if last %}Your plan ended on {{(last.end|ist).strftime('%d %b %Y')}}. Gateways are locked and automatic payment verification is off until you renew.{% else %}Buy a gateway plan below to unlock it. Only the gateway you buy will be visible in your account.{% endif %}</p>{% endif %}</div>
+<p class="mut" style="font-size:14px;margin:0">{% if last %}Your plan ended on {{last.end.strftime('%d %b %Y')}}. Gateways are locked and automatic payment verification is off until you renew.{% else %}Buy a gateway plan below to unlock it. Only the gateway you buy will be visible in your account.{% endif %}</p>{% endif %}</div>
 
 {% for c in cards %}{% set p=c.p %}
 {% if c.trial %}<div class="card pc"><span class="hrs">{{p.hours or 12}} HOURS</span><h3 style="font-size:19px;margin:8px 0">{{p.name}}</h3>
@@ -34,7 +34,7 @@
 {% if not cards %}<div class="card"><p class="mut">No plans are available right now.</p></div>{% endif %}
 
 <div class="card wrap"><h3>History</h3><table><tr><th>Plan</th><th>Start</th><th>End</th><th>Paid</th><th>Status</th><th></th></tr>
-{% for h in hist %}<tr><td>{{plans[h.plan_id].name}}</td><td>{{(h.start|ist).strftime('%d %b %Y')}}</td><td>{{(h.end|ist).strftime('%d %b %Y %H:%M') if h.end else '-'}}</td><td>{{h.price_paid|rs}}</td><td>{{h.status}}</td><td><a href="/subscription/{{h.id}}/receipt">Receipt</a></td></tr>
+{% for h in hist %}<tr><td>{{plans[h.plan_id].name}}</td><td>{{h.start.strftime('%d %b %Y')}}</td><td>{{h.end.strftime('%d %b %Y %H:%M') if h.end else '-'}}</td><td>{{h.price_paid|rs}}</td><td>{{h.status}}</td><td><a href="/subscription/{{h.id}}/receipt">Receipt</a></td></tr>
 {% else %}<tr><td colspan=6 class="mut">No subscriptions yet.</td></tr>{% endfor %}</table></div>
 <script>
 document.querySelectorAll('.pc[data-credit]').forEach(function(card){var cr=+card.dataset.credit,sel=card.querySelector('.tn'),du=card.querySelector('.due');if(!sel)return;

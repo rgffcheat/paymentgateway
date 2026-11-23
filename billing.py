@@ -7,7 +7,7 @@ from sqlalchemy import select, func
 from db import SessionLocal, get_db
 from models import User, GatewayCred, Txn, Plan, Subscription, SubOrder, Broadcast, Notification, AuditLog, LoginLog, ApiKey, now
 import security as sec, providers as gw
-from core import ist, render, flash, go, check_csrf, audit, current, owner_only, cfg_for, new_pay_id, get_setting, set_setting
+from core import render, flash, go, check_csrf, audit, current, owner_only, cfg_for, new_pay_id, get_setting, set_setting
 from extras import plan_for, notify
 
 router = APIRouter()
@@ -97,7 +97,7 @@ def activate(db, o, source="payment"):
     o.status, o.paid_at, o.sub_id = "PAID", now(), s.id
     if p.code == "trial": u.trial_used = True
     audit(db, o.user_id, "plan_activated", f"{p.name} order {o.id} paid {o.amount}"); db.commit()
-    notify(db, u.id, "subscription", f"{p.name} is active until {ist(s.end):%d %b %Y %H:%M} IST. Payment successful.")
+    notify(db, u.id, "subscription", f"{p.name} is active until {s.end:%d %b %Y %H:%M} UTC. Payment successful.")
     owner = db.scalar(select(User).where(User.role == "owner").order_by(User.id))
     if owner and owner.id != u.id and o.amount: notify(db, owner.id, "plan_sold", f"{u.business_name or u.name} bought {p.name} for ₹{o.amount/100:.2f}")
     return s
@@ -273,7 +273,7 @@ def assign(request: Request, user_id: int = Form(), plan_id: int = Form(), days:
     s = grant(db, tu.id, p, days or p.duration_days or 30, lp, cash, "admin")
     if p.code == "trial": tu.trial_used = True
     audit(db, u.id, "assign_plan", f"user {tu.id} -> {p.name}"); db.commit()
-    notify(db, tu.id, "subscription", f"Your plan is now {p.name}" + (f" (valid until {ist(s.end):%d %b %Y %H:%M} IST)" if s.end else " (lifetime)"))
+    notify(db, tu.id, "subscription", f"Your plan is now {p.name}" + (f" (valid until {s.end:%d %b %Y %H:%M} UTC)" if s.end else " (lifetime)"))
     flash(request, f"Assigned {p.name} to {tu.username}."); return go("/admin/subscriptions")
 
 # ---------- owner: per-user controls ----------
@@ -292,7 +292,7 @@ def unlock_user(uid: int, request: Request, plan_id: int = Form(), days: int = F
     d = min(max(1, d), 3650)
     s = grant(db, tu.id, p, d, 0, 0, "admin")
     audit(db, u.id, "unlock_plan", f"user {tu.id} -> {p.name} {d}d"); db.commit()
-    notify(db, tu.id, "subscription", f"{LABEL[p.code]} unlocked by admin until {ist(s.end):%d %b %Y %H:%M} IST.")
+    notify(db, tu.id, "subscription", f"{LABEL[p.code]} unlocked by admin until {s.end:%d %b %Y %H:%M} UTC.")
     flash(request, f"{LABEL[p.code]} unlocked for {tu.username} for {d} day(s)."); return go(f"/admin/users/{uid}")
 @router.post("/admin/users/{uid}/plan_cancel")
 def plan_cancel(uid: int, request: Request, csrf: str = Form(""), u=Depends(owner_only), db=Depends(get_db)):

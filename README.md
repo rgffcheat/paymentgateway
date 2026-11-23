@@ -41,9 +41,3 @@ The service pings its own /healthz every 5 min (uses RENDER_EXTERNAL_URL, set by
 
 ## Part 7 (backup)
 - Owner Panel -> Backup: download one .json.gz with every table; upload it to restore. "Add missing only" keeps current data and brings back missing users/records; "Replace everything" (type RESTORE) loads the backup exactly in one transaction (all-or-nothing). Columns that do not exist in the backup get defaults, so it works after you add new features. Use the same SECRET_KEY, otherwise saved gateway credentials / API keys cannot be decrypted. You are signed out after a restore.
-
-## Part 8 (auto-backup every 12 hours)
-- Owner Panel -> Backup -> "Automatic backup to Telegram": bot token (@BotFather), your chat ID, interval (default 12 h), ON/OFF. Press Start on the bot once.
-- Alternative (survives even a wiped database): set Render env vars TELEGRAM_BOT_TOKEN and BACKUP_CHAT_ID; the panel fields override them if filled.
-- "Send now (test)" sends a backup immediately. Failed sends retry every 10 min. The last result is shown on the page.
-- Restore: download the .json.gz from Telegram -> Backup page -> Upload & restore.

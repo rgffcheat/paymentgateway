@@ -88,7 +88,7 @@ def deliver(db, d):
     else:
         ts = str(int(time.time())); secret = sec.dec(ep.secret_enc)["s"]
         try:
-            r = requests.post(ep.url, data=d.payload, timeout=5, allow_redirects=False, headers={
+            r = requests.post(ep.url, data=d.payload, timeout=10, allow_redirects=False, headers={
                 "Content-Type": "application/json", "X-Payment-Gateway-Timestamp": ts, "X-Payment-Gateway-Signature": "sha256=" + sign(secret, ts, d.payload)})
             d.last_code = r.status_code; ok = 200 <= r.status_code < 300; d.last_error = "" if ok else f"HTTP {r.status_code}"
         except Exception as e: d.last_error = str(e)[:200]
@@ -303,12 +303,10 @@ def worker():
     while True:
         try:
             with SessionLocal() as db:
-                for d in db.scalars(select(WebhookDelivery).where(WebhookDelivery.status == "PENDING", WebhookDelivery.next_try <= now()).limit(8)).all(): deliver(db, d)
+                for d in db.scalars(select(WebhookDelivery).where(WebhookDelivery.status == "PENDING", WebhookDelivery.next_try <= now()).limit(20)).all(): deliver(db, d)
                 if time.time() - last > 15:  # fast reconciliation so bots/websites get their webhook within seconds of payment
                     last = time.time()
-                    for t in db.scalars(select(Txn).where(Txn.status == "PENDING", Txn.created >= now() - timedelta(days=1)).order_by(Txn.id.desc()).limit(40)).all():  # reconciliation
-                        try: refresh(db, t)
-                        except Exception as ex: db.rollback(); print("reconcile error:", ex)
+                    for t in db.scalars(select(Txn).where(Txn.status == "PENDING", Txn.created >= now() - timedelta(days=1)).order_by(Txn.id.desc()).limit(40)).all(): refresh(db, t)  # reconciliation
                     for r in db.scalars(select(Refund).where(Refund.status == "PENDING").limit(20)).all(): refresh_refund(db, r)
                     for s in db.scalars(select(Subscription).where(Subscription.status == "active", Subscription.end != None)).all():  # noqa
                         if s.end <= now(): s.status = "expired"; db.commit(); notify(db, s.user_id, "subscription_expired", "Your subscription has expired. You are now on the Free plan.")

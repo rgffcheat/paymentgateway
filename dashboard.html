@@ -12,6 +12,6 @@
 <div class="card"><div class="ch"><div><h3>Payment volume</h3><p class="mut">Successful collections over the last 7 days</p></div><a href="/transactions?status=SUCCESS"><b>View report</b></a></div>
 <div class="chart">{% for d,v in days %}<div class="col"><div class="bw"><div class="b" title="{{v|rs}}" style="height:{{ (v*100/maxd)|round(0)|int if v else 3 }}%"></div></div><span>{{d}}</span></div>{% endfor %}</div></div>
 <div class="card rt"><div class="ch"><div><h3>Recent transactions</h3><p class="mut">Latest payment activity</p></div><a href="/transactions"><b>View all</b></a></div>
-{% for t in recent %}<div class="tr"><div class="l"><div class="oid">{{t.pay_id}}</div><div class="sub">{{t.merchant_order_id or '—'}}</div><div class="sub">{{(t.created|ist).strftime('%d %b, %H:%M')}}</div></div>
+{% for t in recent %}<div class="tr"><div class="l"><div class="oid">{{t.pay_id}}</div><div class="sub">{{t.merchant_order_id or '—'}}</div><div class="sub">{{t.created.strftime('%d %b, %H:%M')}}</div></div>
 <div class="r"><div class="amt">{{t.amount|rs}}</div><span class="pill {{t.status}}">{{t.status|replace('_',' ')|capitalize}}</span></div></div>
 {% else %}<p class="mut">No payments yet.</p>{% endfor %}</div>{% endblock %}
