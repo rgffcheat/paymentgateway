@@ -54,20 +54,23 @@ def _scan(cfg):
     key = cfg["gmail"].lower()
     with _lock:
         c = _cache.get(key)
-        if c and time.time() - c[0] < (5 if c[2] else 60): return c[1]   # fresh result (5s) or recent failure (60s) -> do not hit Gmail again
+        if c and time.time() - c[0] < (5 if c[2] else 15): return c[1]   # fresh result (5s) or recent failure (15s) -> do not hit Gmail again
         lk = _locks.setdefault(key, threading.Lock())
     with lk:   # only ONE IMAP scan per Gmail at a time; others wait and reuse its result
         with _lock:
             c = _cache.get(key)
-            if c and time.time() - c[0] < (5 if c[2] else 60): return c[1]
+            if c and time.time() - c[0] < (5 if c[2] else 15): return c[1]
         out = []; ok = True
         try:
             M = _login(cfg)
             try:
                 M.select("INBOX", readonly=True)
                 since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%d-%b-%Y")
-                typ, data = M.search(None, "SINCE", since)
-                for i in (data[0].split()[-30:] if typ == "OK" and data and data[0] else []):
+                sender = (cfg.get("sender") or SENDER_DEFAULT).replace('"', "")
+                try: typ, data = M.search(None, "SINCE", since, "FROM", '"%s"' % sender)   # server-side filter: only the bank/FamPay mails, so busy inboxes never push the payment mail out of the window
+                except Exception: typ, data = M.search(None, "SINCE", since)
+                if typ != "OK": typ, data = M.search(None, "SINCE", since)
+                for i in (data[0].split()[-80:] if typ == "OK" and data and data[0] else []):
                     t, d = M.fetch(i, "(BODY.PEEK[])")
                     if t == "OK" and d and isinstance(d[0], tuple):
                         r = _parse(d[0][1], cfg.get("sender") or SENDER_DEFAULT)
@@ -75,8 +78,8 @@ def _scan(cfg):
             finally:
                 try: M.logout()
                 except Exception: pass
-        except Exception:
-            ok = False; out = (_cache.get(key) or (0, []))[1]
+        except Exception as ex:
+            ok = False; out = (_cache.get(key) or (0, []))[1]; print("fampay scan error:", type(ex).__name__, str(ex)[:120], flush=True)
         with _lock: _cache[key] = (time.time(), out, ok)
         return out
 

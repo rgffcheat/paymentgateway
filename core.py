@@ -521,9 +521,6 @@ def pay_qr_png(pay_id: str, db: Session = Depends(get_db)):
 def pay_status(pay_id: str, db: Session = Depends(get_db)):
     if not sec.rate_ok(f"poll:{pay_id}", 40): raise HTTPException(429, "slow down")
     t = _pay(db, pay_id)
-    if t.status in ("PENDING", "CREATED") and t.gateway == "fampay":   # background worker verifies FamPay (Gmail) - never block a web thread on IMAP
-        if t.expires_at < now(): t = refresh(db, t)
-        return {"status": t.status}
     t = refresh(db, t); return {"status": t.status}
 @app.api_route("/callback/paytm", methods=["GET", "POST"])
 async def paytm_cb(request: Request, db: Session = Depends(get_db)):
