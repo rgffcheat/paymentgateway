@@ -22,6 +22,17 @@ _missing = [n + ".html" for n in _NEED if not any(os.path.exists(os.path.join(d,
 if _missing: raise ImportError("Missing template files (upload them to GitHub): " + ", ".join(_missing))
 templates = Jinja2Templates(directory=TEMPLATE_DIRS)
 templates.env.filters["rs"] = lambda p: f"₹{(p or 0)/100:,.2f}"
+from datetime import timezone as _tz, timedelta as _td
+try:
+    from zoneinfo import ZoneInfo as _ZI
+    _LOCAL_TZ = _ZI(os.getenv("DISPLAY_TZ", "Asia/Kolkata"))
+except Exception: _LOCAL_TZ = _tz(_td(hours=5, minutes=30))  # IST fallback when the server has no tz database
+def ist(d):
+    """Stored times are UTC; this converts for display (default Asia/Kolkata, change with env DISPLAY_TZ)."""
+    if not d: return d
+    try: return d.replace(tzinfo=_tz.utc).astimezone(_LOCAL_TZ).replace(tzinfo=None)
+    except Exception: return d
+templates.env.filters["ist"] = ist
 
 def _gate_ok(request, db, u, g):
     from billing import allowed
@@ -399,14 +410,15 @@ def create_payment(db, user, amount, gateway, merchant_order_id, customer):
     db.add(t); db.commit(); return t
 def _refresh(db, t):
     """Only a provider-verified response (order id + amount + success) may set SUCCESS. Idempotent."""
-    if t.status not in ("PENDING", "CREATED"): return t
+    late = t.gateway == "fampay" and t.status == "EXPIRED"   # money may arrive a little after the QR expired: keep checking for 30 min
+    if t.status not in ("PENDING", "CREATED") and not late: return t
     cfg, env = cfg_for(db, t.user_id, t.gateway, enabled_only=False)  # pending/test payments must verify even if the gateway is not enabled
-    if cfg:
+    if cfg and not (t.expires_at and t.expires_at < now() - timedelta(minutes=30)):   # long-expired: just expire it, no Gmail/Paytm call
         try:
             used = set(db.scalars(select(Txn.msg_key).where(Txn.user_id == t.user_id, Txn.gateway == t.gateway, Txn.msg_key != "", Txn.id != t.id)))  # emails that already confirmed another order
-            r = gw.get(t.gateway).status(cfg, env, t.pay_id, amount=t.amount, since=t.created, used_keys=used)
+            r = gw.get(t.gateway).status(cfg, env, t.pay_id, amount=t.amount, since=t.created, used_keys=used, until=(t.expires_at + timedelta(minutes=30)))
             t = db.scalar(select(Txn).where(Txn.id == t.id).with_for_update().execution_options(populate_existing=True))
-            if t.status in ("PENDING", "CREATED"):
+            if t.status in ("PENDING", "CREATED", "EXPIRED"):
                 if r["state"] == "SUCCESS":
                     key = r.get("key", "")
                     if key: dup = key in used
@@ -497,7 +509,7 @@ def checkout_php(request: Request, amount: float, api_key: str = "", order_id: s
 @app.get("/pay/{pay_id}")
 def pay_page(pay_id: str, request: Request, db: Session = Depends(get_db)):
     t = _pay(db, pay_id); m = db.get(User, t.user_id)
-    return render(request, "checkout.html", None, t=t, merchant=(m.business_name or m.name), mphoto=(f"/profile/photo/{m.id}?v={m.photo_v}" if m.photo_b64 else ""), secs=max(0, int((t.expires_at - now()).total_seconds())), ret=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ""), back=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ("/gateways" if (t.merchant_order_id or "").startswith("TEST-") else "")))
+    return render(request, "checkout.html", None, t=t, merchant=(m.business_name or m.name), mphoto=(f"/profile/photo/{m.id}?v={m.photo_v}" if m.photo_mime else ""), secs=max(0, int((t.expires_at - now()).total_seconds())), ret=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ""), back=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ("/gateways" if (t.merchant_order_id or "").startswith("TEST-") else "")))
 @app.get("/pay/{pay_id}/qr.svg")
 def pay_qr(pay_id: str, db: Session = Depends(get_db)):
     t = _pay(db, pay_id); buf = io.BytesIO(); segno.make(t.qr_data, error="m").save(buf, kind="svg", scale=8, border=2)
@@ -509,7 +521,8 @@ def pay_qr_png(pay_id: str, db: Session = Depends(get_db)):
 @app.get("/pay/{pay_id}/status")
 def pay_status(pay_id: str, db: Session = Depends(get_db)):
     if not sec.rate_ok(f"poll:{pay_id}", 40): raise HTTPException(429, "slow down")
-    t = refresh(db, _pay(db, pay_id)); return {"status": t.status}
+    t = _pay(db, pay_id)
+    t = refresh(db, t); return {"status": t.status}
 @app.api_route("/callback/paytm", methods=["GET", "POST"])
 async def paytm_cb(request: Request, db: Session = Depends(get_db)):
     f = dict(await request.form()) if request.method == "POST" else dict(request.query_params)
@@ -618,3 +631,5 @@ from billing import router as _brouter  # noqa: E402
 app.include_router(_brouter)
 from backup import router as _bkrouter  # noqa: E402
 app.include_router(_bkrouter)
+from music import router as _mrouter  # noqa: E402
+app.include_router(_mrouter)

@@ -10,11 +10,11 @@
 </style>
 <div class="card pf"><h2 style="margin-bottom:2px">Personal profile</h2><p class="mut" style="margin-top:0">Manage your photo and account details.</p>
 <form method="post" action="/profile" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{{csrf}}">
-<div class="phb"><div class="av" id="av">{% if user.photo_b64 %}<img id="avi" src="/profile/photo/{{user.id}}?v={{user.photo_v}}" alt="">{% else %}{{(user.name or '?')[:1]|upper}}{% endif %}</div>
+<div class="phb"><div class="av" id="av">{% if user.photo_mime %}<img id="avi" src="/profile/photo/{{user.id}}?v={{user.photo_v}}" alt="">{% else %}{{(user.name or '?')[:1]|upper}}{% endif %}</div>
 <h3 style="margin:0 0 4px">Profile photo</h3><p class="mut" style="margin:0 0 12px">Add your photo or business logo. It also appears on your checkout page.</p>
 <div class="fp"><label class="fb" for="ph">Choose photo</label><input type="file" id="ph" name="photo" accept="image/jpeg,image/png,image/webp"><span id="phn">No photo selected</span></div>
 <p class="mut" style="font-size:14px;margin:10px 0 0">JPG, PNG or WebP · Maximum 2 MB</p>
-{% if user.photo_b64 %}<label class="chk" style="display:flex;gap:10px;align-items:center;margin-top:10px;font-weight:500"><input type="checkbox" name="remove_photo" value="1" style="width:20px;height:20px;margin:0"> Remove current photo</label>{% endif %}</div>
+{% if user.photo_mime %}<label class="chk" style="display:flex;gap:10px;align-items:center;margin-top:10px;font-weight:500"><input type="checkbox" name="remove_photo" value="1" style="width:20px;height:20px;margin:0"> Remove current photo</label>{% endif %}</div>
 
 <label>Login email</label><input value="{{user.email}}" readonly><p class="hint">Your registered sign-in email.</p>
 <label>Username</label><input value="{{user.username}}" readonly><p class="hint">Your login username cannot be changed.</p>

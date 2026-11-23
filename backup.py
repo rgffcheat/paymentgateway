@@ -1,19 +1,20 @@
 """Owner Panel -> Backup: download every table (all users A-Z, gateways, keys, payments, plans...) as one file, upload it later to restore.
 Restore reads only the columns that exist in the current code, so a backup taken before you added new columns/features still restores (new columns get their defaults)."""
-import json, gzip, zlib
+import json, gzip, zlib, os, time, threading
+import requests
 from datetime import datetime
 from fastapi import APIRouter, Request, Depends, Form, File, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import select, func, delete, insert, text, DateTime
 from sqlalchemy.exc import IntegrityError
-from db import Base, engine, get_db
+from db import Base, engine, get_db, SessionLocal
 import models
 from models import now
-from core import render, flash, go, check_csrf, audit, owner_only
+from core import render, flash, go, check_csrf, audit, owner_only, get_setting, set_setting, ist
 
 router = APIRouter()
 MAX_UPLOAD = 100 * 1024 * 1024
-def _tables(): return Base.metadata.sorted_tables
+def _tables(): return [t for t in Base.metadata.sorted_tables if t.name != "music_tracks"]  # audio files are large: not part of the JSON backup
 
 def export_all(db):
     out = {}
@@ -81,7 +82,12 @@ def restore_merge(data):
 @router.get("/admin/backup")
 def backup_page(request: Request, u=Depends(owner_only), db=Depends(get_db)):
     counts = [(t.name, db.scalar(select(func.count()).select_from(t))) for t in _tables()]
-    return render(request, "admin_backup.html", u, counts=counts, total=sum(c for _, c in counts))
+    tok, chat = _tg_cfg(); last = get_setting("backup_last_ok", "0")
+    try: last_txt = f"{ist(datetime.utcfromtimestamp(float(last))):%d %b %Y, %I:%M %p}" if float(last) > 0 else ""
+    except Exception: last_txt = ""
+    return render(request, "admin_backup.html", u, counts=counts, total=sum(c for _, c in counts),
+                  tg_tok=bool(tok), tg_tok_hint=("…" + tok[-4:]) if tok else "", tg_chat=chat, auto_on=get_setting("backup_auto", "1") == "1",
+                  hours=_hours(), last_txt=last_txt, status=get_setting("backup_status", ""))
 @router.get("/admin/backup/download")
 def backup_download(request: Request, u=Depends(owner_only), db=Depends(get_db)):
     data = export_all(db); n = sum(len(v) for v in data["tables"].values())
@@ -101,8 +107,106 @@ async def backup_restore(request: Request, file: UploadFile = File(...), mode: s
     try: a, b = restore_replace(data) if mode == "replace" else restore_merge(data)
     except Exception as e: flash(request, f"Restore failed, nothing was changed: {str(e)[:220]}", "err"); return go("/admin/backup")
     db.rollback()
+    try:
+        _t = str(time.time()); set_setting(db, "backup_last_ok", _t); set_setting(db, "backup_last_try", _t)   # restored settings must not trigger an instant heavy backup
+    except Exception: db.rollback()
     try: audit(db, None, "backup_restore", f"{mode}: {a} records" + (f", {b} skipped" if b else "") + f" by user {uid}"); db.commit()
     except Exception: db.rollback()
     request.session.clear()  # accounts may have changed: sign in again
     flash(request, (f"Restore complete: {a} records loaded." if mode == "replace" else f"Restore complete: {a} records added, {b} already existed or conflicted.") + " Please sign in again.")
     return go("/login")
+
+
+# ---------- automatic backup: every N hours (default 12) the full backup is sent to the owner's Telegram ----------
+# Why Telegram: the copy lives OUTSIDE Render, so even if the service/database is wiped you still have the file.
+def _tg_cfg():
+    tok = (get_setting("backup_tg_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")).strip()
+    chat = (get_setting("backup_tg_chat") or os.getenv("BACKUP_CHAT_ID", "")).strip()
+    return tok, chat
+def _hours():
+    try: return min(168, max(1, int(get_setting("backup_hours", "12") or 12)))
+    except Exception: return 12
+
+def make_backup_bytes():
+    """Streams table by table into a gzip (level 1) so RAM and CPU stay low and the web server keeps answering."""
+    import io
+    buf = io.BytesIO(); n = 0
+    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=1) as gz:
+        gz.write(('{"format":"payment-gateway-backup","version":1,"created":"%sZ","tables":{' % now().isoformat()).encode())
+        with SessionLocal() as db:
+            for ti, t in enumerate(_tables()):
+                gz.write((("," if ti else "") + json.dumps(t.name) + ":[").encode()); first = True
+                for r in db.execute(select(t).execution_options(yield_per=300)).mappings():
+                    row = {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in r.items()}
+                    gz.write((("" if first else ",") + json.dumps(row, separators=(",", ":"), default=str)).encode()); first = False; n += 1
+                    if n % 200 == 0: time.sleep(0.02)   # let web requests run
+                gz.write(b"]")
+        gz.write(b"}}")
+    return buf.getvalue(), n
+
+def send_backup(reason="auto"):
+    """Returns (ok, message). The bot token is never put into any message."""
+    tok, chat = _tg_cfg()
+    if not tok or not chat: return False, "Telegram bot token / chat ID is not set."
+    try: body, n = make_backup_bytes()
+    except Exception as e: return False, f"Could not build the backup: {type(e).__name__}"
+    if len(body) > 49 * 1024 * 1024: return False, "Backup is over Telegram's 50 MB file limit."
+    fn = f"payment-gateway-backup-{now():%Y%m%d-%H%M}.json.gz"
+    cap = f"💾 Payment Gateway backup ({reason})\n{n} records · {max(1, len(body) // 1024)} KB\n{now():%d %b %Y %H:%M} UTC"
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{tok}/sendDocument", data={"chat_id": chat, "caption": cap},
+                          files={"document": (fn, body, "application/gzip")}, timeout=90)
+        j = r.json()
+    except Exception as e: return False, f"Could not reach Telegram ({type(e).__name__})."
+    if not j.get("ok"): return False, "Telegram refused: " + str(j.get("description", "unknown error"))[:160]
+    return True, f"Sent {n} records ({max(1, len(body) // 1024)} KB)."
+
+def _record(ok, msg):
+    with SessionLocal() as db:
+        t = time.time()
+        if ok: set_setting(db, "backup_last_ok", str(t))
+        set_setting(db, "backup_status", f"{'OK' if ok else 'FAILED'} · {now():%d %b %H:%M} UTC · {msg}")
+
+def _scheduler():
+    time.sleep(600)  # let the app finish starting and settle (10 min)
+    while True:
+        try:
+            if get_setting("backup_auto", "1") == "1":
+                tok, chat = _tg_cfg()
+                if tok and chat:
+                    last_ok = float(get_setting("backup_last_ok", "0") or 0); last_try = float(get_setting("backup_last_try", "0") or 0)
+                    t = time.time()
+                    if t - last_ok >= _hours() * 3600 and t - last_try >= 600:  # failed attempts are retried every 10 min
+                        with SessionLocal() as db:
+                            set_setting(db, "backup_last_try", str(t))
+                            has_users = db.scalar(select(func.count()).select_from(models.User)) > 0
+                        if has_users:  # never send an empty backup after a database wipe
+                            ok, msg = send_backup("auto"); _record(ok, msg); print("auto-backup:", ok, msg, flush=True)
+        except Exception as e: print("backup scheduler error:", type(e).__name__, flush=True)
+        time.sleep(60)
+_sched_started = False
+def _start_scheduler():
+    global _sched_started
+    if not _sched_started: _sched_started = True; threading.Thread(target=_scheduler, daemon=True, name="auto-backup").start()
+_start_scheduler()
+
+@router.post("/admin/backup/auto")
+def backup_auto_save(request: Request, tg_token: str = Form(""), tg_chat: str = Form(""), hours: int = Form(12), auto: str = Form(""),
+                     csrf: str = Form(""), u=Depends(owner_only), db=Depends(get_db)):
+    check_csrf(request, csrf)
+    tg_token, tg_chat = tg_token.strip(), tg_chat.strip()
+    if tg_token and (":" not in tg_token or " " in tg_token): flash(request, "That does not look like a Telegram bot token (from @BotFather).", "err"); return go("/admin/backup")
+    if tg_chat and not (tg_chat.lstrip("-").isdigit() or tg_chat.startswith("@")): flash(request, "Chat ID must be a number (or @channelname).", "err"); return go("/admin/backup")
+    if tg_token: set_setting(db, "backup_tg_token", tg_token)  # empty = keep the saved token
+    set_setting(db, "backup_tg_chat", tg_chat)
+    set_setting(db, "backup_hours", str(min(168, max(1, hours))))
+    set_setting(db, "backup_auto", "1" if auto else "0")
+    audit(db, u.id, "backup_auto_settings", f"auto={'on' if auto else 'off'}, every {min(168, max(1, hours))}h"); db.commit()
+    flash(request, "Auto-backup settings saved." + ("" if auto else " Auto-backup is OFF.")); return go("/admin/backup")
+
+@router.post("/admin/backup/send-now")
+def backup_send_now(request: Request, csrf: str = Form(""), u=Depends(owner_only), db=Depends(get_db)):
+    check_csrf(request, csrf)
+    ok, msg = send_backup("manual"); _record(ok, msg)
+    audit(db, u.id, "backup_send_now", ("ok: " if ok else "failed: ") + msg); db.commit()
+    flash(request, ("Backup sent to your Telegram. " if ok else "Could not send: ") + msg, "ok" if ok else "err"); return go("/admin/backup")

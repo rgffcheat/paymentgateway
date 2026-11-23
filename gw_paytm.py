@@ -29,7 +29,7 @@ def _post(cfg, env, path, body, client_id=None):
     sig = generate_signature(json.dumps(body), cfg["key"])
     head = {"signature": sig}
     if client_id: head.update({"clientId": client_id, "version": "v1"})
-    r = requests.post(HOSTS[env] + path, json={"head": head, "body": body}, timeout=20)
+    r = requests.post(HOSTS[env] + path, json={"head": head, "body": body}, timeout=10)
     r.raise_for_status(); return r.json()
 def _has_key(cfg): return bool((cfg.get("key") or "").strip())
 
@@ -52,7 +52,7 @@ def _amt_paise(v):
 def _status_keyless(cfg, env, pay_id):
     """Merchant status lookup by MID + ORDERID only (no Merchant Key). Returns Paytm's raw JSON."""
     q = json.dumps({"MID": cfg["mid"], "ORDERID": pay_id}, separators=(",", ":"))
-    r = requests.get(HOSTS["production"] + "/merchant-status/getTxnStatus", params={"JsonData": q}, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+    r = requests.get(HOSTS["production"] + "/merchant-status/getTxnStatus", params={"JsonData": q}, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
     r.raise_for_status(); return r.json()
 
 # Paytm replies TXN_FAILURE + these codes when the order simply does not exist (yet): the customer has not paid.

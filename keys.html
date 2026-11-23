@@ -22,9 +22,9 @@
 <div class="kbox" id="kb{{k.id}}" data-mask="••••••••••••••••••••••••••••••••••••••••">{{'••••••••••••••••••••••••••••••••••••••••' if not k.revoked else k.prefix+'••••••••••••'}}</div>
 {% if not k.revoked %}<div class="krow"><button type="button" onclick="kShow({{k.id}},this)">Show</button><button type="button" onclick="kCopy({{k.id}},this)">Copy</button></div>{% endif %}
 <div class="kl">API HOLDER</div><div class="kv">{{user.name|upper}}</div>
-<div class="k2"><div><div class="kl">ISSUED</div><div class="kv">{{k.created.strftime('%m / %y')}}</div></div>
-<div><div class="kl">EXPIRES WITH PLAN</div><div class="kv">{{sub.end.strftime('%d / %m / %y') if sub and sub.end else 'No expiry'}}</div></div></div>
-<div class="klast">Last used: {{k.last_used.strftime('%d %b %Y, %H:%M') if k.last_used else 'never'}} · {{k.uses}} calls</div>
+<div class="k2"><div><div class="kl">ISSUED</div><div class="kv">{{(k.created|ist).strftime('%m / %y')}}</div></div>
+<div><div class="kl">EXPIRES WITH PLAN</div><div class="kv">{{(sub.end|ist).strftime('%d / %m / %y') if sub and sub.end else 'No expiry'}}</div></div></div>
+<div class="klast">Last used: {{(k.last_used|ist).strftime('%d %b %Y, %H:%M') if k.last_used else 'never'}} · {{k.uses}} calls</div>
 <div class="krow">{% if not k.revoked %}<form method="post" action="/keys/{{k.id}}/revoke" onsubmit="return confirm('Revoke this key? Apps using it will stop working.')"><input type="hidden" name="csrf" value="{{csrf}}"><button class="rv">Revoke</button></form>{% else %}<div></div>{% endif %}
 <form method="post" action="/keys/{{k.id}}/delete" onsubmit="return confirm('Permanently delete this key?')"><input type="hidden" name="csrf" value="{{csrf}}"><button class="dl2">Delete</button></form></div>
 </div>
