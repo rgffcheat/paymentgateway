@@ -412,7 +412,7 @@ def _refresh(db, t):
     """Only a provider-verified response (order id + amount + success) may set SUCCESS. Idempotent."""
     if t.status not in ("PENDING", "CREATED"): return t
     cfg, env = cfg_for(db, t.user_id, t.gateway, enabled_only=False)  # pending/test payments must verify even if the gateway is not enabled
-    if cfg:
+    if cfg and not (t.expires_at and t.expires_at < now() - timedelta(minutes=30)):   # long-expired: just expire it, no Gmail/Paytm call
         try:
             used = set(db.scalars(select(Txn.msg_key).where(Txn.user_id == t.user_id, Txn.gateway == t.gateway, Txn.msg_key != "", Txn.id != t.id)))  # emails that already confirmed another order
             r = gw.get(t.gateway).status(cfg, env, t.pay_id, amount=t.amount, since=t.created, used_keys=used)
@@ -508,7 +508,7 @@ def checkout_php(request: Request, amount: float, api_key: str = "", order_id: s
 @app.get("/pay/{pay_id}")
 def pay_page(pay_id: str, request: Request, db: Session = Depends(get_db)):
     t = _pay(db, pay_id); m = db.get(User, t.user_id)
-    return render(request, "checkout.html", None, t=t, merchant=(m.business_name or m.name), mphoto=(f"/profile/photo/{m.id}?v={m.photo_v}" if m.photo_b64 else ""), secs=max(0, int((t.expires_at - now()).total_seconds())), ret=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ""), back=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ("/gateways" if (t.merchant_order_id or "").startswith("TEST-") else "")))
+    return render(request, "checkout.html", None, t=t, merchant=(m.business_name or m.name), mphoto=(f"/profile/photo/{m.id}?v={m.photo_v}" if m.photo_mime else ""), secs=max(0, int((t.expires_at - now()).total_seconds())), ret=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ""), back=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ("/gateways" if (t.merchant_order_id or "").startswith("TEST-") else "")))
 @app.get("/pay/{pay_id}/qr.svg")
 def pay_qr(pay_id: str, db: Session = Depends(get_db)):
     t = _pay(db, pay_id); buf = io.BytesIO(); segno.make(t.qr_data, error="m").save(buf, kind="svg", scale=8, border=2)
@@ -520,7 +520,11 @@ def pay_qr_png(pay_id: str, db: Session = Depends(get_db)):
 @app.get("/pay/{pay_id}/status")
 def pay_status(pay_id: str, db: Session = Depends(get_db)):
     if not sec.rate_ok(f"poll:{pay_id}", 40): raise HTTPException(429, "slow down")
-    t = refresh(db, _pay(db, pay_id)); return {"status": t.status}
+    t = _pay(db, pay_id)
+    if t.status in ("PENDING", "CREATED") and t.gateway == "fampay":   # background worker verifies FamPay (Gmail) - never block a web thread on IMAP
+        if t.expires_at < now(): t = refresh(db, t)
+        return {"status": t.status}
+    t = refresh(db, t); return {"status": t.status}
 @app.api_route("/callback/paytm", methods=["GET", "POST"])
 async def paytm_cb(request: Request, db: Session = Depends(get_db)):
     f = dict(await request.form()) if request.method == "POST" else dict(request.query_params)
