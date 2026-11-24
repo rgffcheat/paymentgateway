@@ -29,7 +29,7 @@ def _post(cfg, env, path, body, client_id=None):
     sig = generate_signature(json.dumps(body), cfg["key"])
     head = {"signature": sig}
     if client_id: head.update({"clientId": client_id, "version": "v1"})
-    r = requests.post(HOSTS[env] + path, json={"head": head, "body": body}, timeout=10)
+    r = requests.post(HOSTS[env] + path, json={"head": head, "body": body}, timeout=20)
     r.raise_for_status(); return r.json()
 def _has_key(cfg): return bool((cfg.get("key") or "").strip())
 
@@ -52,7 +52,7 @@ def _amt_paise(v):
 def _status_keyless(cfg, env, pay_id):
     """Merchant status lookup by MID + ORDERID only (no Merchant Key). Returns Paytm's raw JSON."""
     q = json.dumps({"MID": cfg["mid"], "ORDERID": pay_id}, separators=(",", ":"))
-    r = requests.get(HOSTS["production"] + "/merchant-status/getTxnStatus", params={"JsonData": q}, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+    r = requests.get(HOSTS["production"] + "/merchant-status/getTxnStatus", params={"JsonData": q}, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
     r.raise_for_status(); return r.json()
 
 # Paytm replies TXN_FAILURE + these codes when the order simply does not exist (yet): the customer has not paid.
@@ -63,7 +63,16 @@ def _state(st, code, has_txn):
     if st == "TXN_FAILURE" and has_txn and str(code) not in _NOT_FOUND: return "FAILED"
     return "PENDING"
 
+_recent = {}   # pay_id -> (time, result): never ask Paytm about the same order more than once every 3 s (page + bot + worker all poll)
 def status(cfg, env, pay_id, **kw):
+    import time as _t
+    hit = _recent.get(pay_id)
+    if hit and _t.time() - hit[0] < 3: return hit[1]
+    res = _status_real(cfg, env, pay_id)
+    if len(_recent) > 500: _recent.clear()
+    _recent[pay_id] = (_t.time(), res); return res
+
+def _status_real(cfg, env, pay_id):
     env = "production"
     if _has_key(cfg):  # optional signed API (only if an old Merchant Key is still saved)
         res = _post(cfg, env, "/v3/order/status", {"mid": cfg["mid"], "orderId": pay_id})
