@@ -63,16 +63,7 @@ def _state(st, code, has_txn):
     if st == "TXN_FAILURE" and has_txn and str(code) not in _NOT_FOUND: return "FAILED"
     return "PENDING"
 
-_recent = {}   # pay_id -> (time, result): never ask Paytm about the same order more than once every 3 s (page + bot + worker all poll)
 def status(cfg, env, pay_id, **kw):
-    import time as _t
-    hit = _recent.get(pay_id)
-    if hit and _t.time() - hit[0] < 3: return hit[1]
-    res = _status_real(cfg, env, pay_id)
-    if len(_recent) > 500: _recent.clear()
-    _recent[pay_id] = (_t.time(), res); return res
-
-def _status_real(cfg, env, pay_id):
     env = "production"
     if _has_key(cfg):  # optional signed API (only if an old Merchant Key is still saved)
         res = _post(cfg, env, "/v3/order/status", {"mid": cfg["mid"], "orderId": pay_id})

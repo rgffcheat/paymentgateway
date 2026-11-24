@@ -8,5 +8,5 @@
 let s={{secs}};const st=document.getElementById('st'),cd=document.getElementById('cd');
 const done=x=>{if(x!='PENDING'&&x!='CREATED'){document.getElementById('box').innerHTML='';st.className=x;st.innerText=x=='SUCCESS'?'✅ Payment Successful':x;var r=document.getElementById('rt');if(r){r.style.display='block';if(x=='SUCCESS')setTimeout(function(){location.href='{{ret}}'},2500)}clearInterval(p);clearInterval(c)}};
 const c=setInterval(()=>{s=Math.max(0,s-1);if(cd)cd.innerText=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')},1000);
-const p=setInterval(()=>fetch('/pay/{{t.pay_id}}/status').then(r=>r.json()).then(j=>done(j.status)).catch(()=>{}),{{ 2000 if t.gateway=='fampay' else 4000 }});done('{{t.status}}');
+const p=setInterval(()=>fetch('/pay/{{t.pay_id}}/status').then(r=>r.json()).then(j=>done(j.status)).catch(()=>{}),4000);done('{{t.status}}');
 </script>{% endblock %}

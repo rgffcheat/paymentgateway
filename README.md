@@ -47,8 +47,3 @@ The service pings its own /healthz every 5 min (uses RENDER_EXTERNAL_URL, set by
 - Alternative (survives even a wiped database): set Render env vars TELEGRAM_BOT_TOKEN and BACKUP_CHAT_ID; the panel fields override them if filled.
 - "Send now (test)" sends a backup immediately. Failed sends retry every 10 min. The last result is shown on the page.
 - Restore: download the .json.gz from Telegram -> Backup page -> Upload & restore.
-
-## v15 (Fampay fix)
-- Fampay: Gmail is read by one background thread (persistent IMAP, every ~6s, new mails only). status() is memory-only -> no more freezing with many QR pages open.
-- All amounts in the mail are compared; sender filter accepts a comma list; late payments (up to 30 min after expiry) still confirm.
-- Gateways -> FamPay -> "Test Gmail" now shows how many credit mails were found and whether DKIM passed.

@@ -107,9 +107,6 @@ async def backup_restore(request: Request, file: UploadFile = File(...), mode: s
     try: a, b = restore_replace(data) if mode == "replace" else restore_merge(data)
     except Exception as e: flash(request, f"Restore failed, nothing was changed: {str(e)[:220]}", "err"); return go("/admin/backup")
     db.rollback()
-    try:
-        _t = str(time.time()); set_setting(db, "backup_last_ok", _t); set_setting(db, "backup_last_try", _t)   # restored settings must not trigger an instant heavy backup
-    except Exception: db.rollback()
     try: audit(db, None, "backup_restore", f"{mode}: {a} records" + (f", {b} skipped" if b else "") + f" by user {uid}"); db.commit()
     except Exception: db.rollback()
     request.session.clear()  # accounts may have changed: sign in again
@@ -128,21 +125,9 @@ def _hours():
     except Exception: return 12
 
 def make_backup_bytes():
-    """Streams table by table into a gzip (level 1) so RAM and CPU stay low and the web server keeps answering."""
-    import io
-    buf = io.BytesIO(); n = 0
-    with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=1) as gz:
-        gz.write(('{"format":"payment-gateway-backup","version":1,"created":"%sZ","tables":{' % now().isoformat()).encode())
-        with SessionLocal() as db:
-            for ti, t in enumerate(_tables()):
-                gz.write((("," if ti else "") + json.dumps(t.name) + ":[").encode()); first = True
-                for r in db.execute(select(t).execution_options(yield_per=300)).mappings():
-                    row = {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in r.items()}
-                    gz.write((("" if first else ",") + json.dumps(row, separators=(",", ":"), default=str)).encode()); first = False; n += 1
-                    if n % 200 == 0: time.sleep(0.02)   # let web requests run
-                gz.write(b"]")
-        gz.write(b"}}")
-    return buf.getvalue(), n
+    with SessionLocal() as db: data = export_all(db)
+    n = sum(len(v) for v in data["tables"].values())
+    return gzip.compress(json.dumps(data, separators=(",", ":"), default=str).encode("utf-8"), 6), n
 
 def send_backup(reason="auto"):
     """Returns (ok, message). The bot token is never put into any message."""
@@ -168,7 +153,7 @@ def _record(ok, msg):
         set_setting(db, "backup_status", f"{'OK' if ok else 'FAILED'} · {now():%d %b %H:%M} UTC · {msg}")
 
 def _scheduler():
-    time.sleep(600)  # let the app finish starting and settle (10 min)
+    time.sleep(60)  # let the app finish starting
     while True:
         try:
             if get_setting("backup_auto", "1") == "1":

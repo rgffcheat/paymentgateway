@@ -18,7 +18,7 @@ class User(Base):
     business_type: Mapped[str] = mapped_column(String(40), default="")
     gstin: Mapped[str] = mapped_column(String(20), default="")
     address: Mapped[str] = mapped_column(Text, default="")
-    photo_b64: Mapped[str] = mapped_column(Text, default="", deferred=True)  # big: never load on every request
+    photo_b64: Mapped[str] = mapped_column(Text, default="")
     photo_mime: Mapped[str] = mapped_column(String(20), default="")
     photo_v: Mapped[int] = mapped_column(Integer, default=0)
     trial_used: Mapped[bool] = mapped_column(Boolean, default=False)

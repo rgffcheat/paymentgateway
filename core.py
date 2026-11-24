@@ -277,13 +277,12 @@ def paytm_save(request: Request, shop: str = Form(""), upi: str = Form(), mid: s
     upi, mid, shop = upi.strip(), mid.strip(), shop.strip()
     if not shop or "@" not in upi or not mid: flash(request, "Your shop name, UPI ID and MID are required.", "err"); return go("/gateways")
     c = db.scalar(select(GatewayCred).where(GatewayCred.user_id == u.id, GatewayCred.gateway == "paytm"))
-    old = sec.dec(c.data_enc) if c else {}
-    data = sec.enc({"shop": shop[:60], "upi": upi, "mid": mid, "key": "", "extra": old.get("extra") or []})  # Shop name + UPI ID + MID (+ extra accounts kept)
+    data = sec.enc({"shop": shop[:60], "upi": upi, "mid": mid, "key": ""})  # only Shop name + UPI ID + MID are needed
     if c: c.data_enc, c.env, c.enabled = data, "production", bool(enable)
     else: db.add(GatewayCred(user_id=u.id, gateway="paytm", data_enc=data, env="production", enabled=bool(enable)))
     audit(db, u.id, "gateway_save", "paytm"); db.commit(); flash(request, "Paytm setup saved. Press the Rs 1 test to confirm."); return go("/gateways")
 @app.post("/gateways/{gname}/testpay")
-def gateway_testpay(gname: str, request: Request, csrf: str = Form(""), acct: int = Form(0), u=Depends(current), db: Session = Depends(get_db)):
+def gateway_testpay(gname: str, request: Request, csrf: str = Form(""), u=Depends(current), db: Session = Depends(get_db)):
     """Creates a Rs 1 QR with the saved credentials (even if the gateway is not enabled yet). Pay it: SUCCESS = gateway works."""
     check_csrf(request, csrf)
     if not _gate_ok(request, db, u, gname): return go("/subscription")
@@ -293,40 +292,14 @@ def gateway_testpay(gname: str, request: Request, csrf: str = Form(""), acct: in
     if not c: flash(request, "Save setup first.", "err"); return go("/gateways")
     if not sec.rate_ok(f"testpay:{u.id}", 10, 300): flash(request, "Too many tests. Wait a few minutes.", "err"); return go("/gateways")
     pay_id = new_pay_id(db, gname); amount = 100
-    tcfg = sec.dec(c.data_enc)
-    if gname == "paytm":
-        accs = paytm_accounts(tcfg); i = acct if 0 <= acct < len(accs) else 0; tcfg = acct_cfg(tcfg, accs[i])
     if gname == "fampay":
         used = set(db.scalars(select(Txn.amount).where(Txn.user_id == u.id, Txn.gateway == "fampay", Txn.status == "PENDING", Txn.expires_at > now())))
         amount += next((a for a in range(0, 100) if amount + a not in used), 0)
-    try: r = ad.create(tcfg, c.env, pay_id, amount)
+    try: r = ad.create(sec.dec(c.data_enc), c.env, pay_id, amount)
     except Exception as e: flash(request, f"Test failed: {str(e)[:200]}", "err"); return go("/gateways")
     t = Txn(pay_id=pay_id, user_id=u.id, merchant_order_id="TEST-" + pay_id[3:], gateway=gname, amount=amount, status="PENDING",
             customer=json.dumps({"test": True}), qr_data=r["qr_data"], provider_ref=r["provider_ref"], expires_at=now() + timedelta(minutes=10))
     db.add(t); audit(db, u.id, "gateway_testpay", gname); db.commit(); return go(f"/pay/{t.pay_id}")
-@app.post("/gateways/paytm/accounts/add")
-def paytm_acc_add(request: Request, shop: str = Form(""), upi: str = Form(), mid: str = Form(), csrf: str = Form(""), u=Depends(current), db: Session = Depends(get_db)):
-    check_csrf(request, csrf)
-    if not _gate_ok(request, db, u, "paytm"): return go("/subscription")
-    c = db.scalar(select(GatewayCred).where(GatewayCred.user_id == u.id, GatewayCred.gateway == "paytm"))
-    if not c: flash(request, "Save your first Paytm account before adding more.", "err"); return go("/gateways")
-    upi, mid, shop = upi.strip(), mid.strip(), shop.strip()
-    if not shop or "@" not in upi or not mid: flash(request, "Shop name, UPI ID and MID are required.", "err"); return go("/gateways")
-    d = sec.dec(c.data_enc); accs = paytm_accounts(d)
-    if len(accs) >= 20: flash(request, "Maximum 20 Paytm accounts.", "err"); return go("/gateways")
-    if any(a["upi"].lower() == upi.lower() or a["mid"] == mid for a in accs): flash(request, "This UPI ID or MID is already added.", "err"); return go("/gateways")
-    d["extra"] = (d.get("extra") or []) + [{"shop": shop[:60], "upi": upi, "mid": mid, "on": True}]
-    c.data_enc = sec.enc(d); audit(db, u.id, "paytm_account_add", upi); db.commit(); flash(request, f"Account #{len(accs)+1} added. Payments now rotate across all active accounts. Use its Rs 1 test to confirm."); return go("/gateways")
-@app.post("/gateways/paytm/accounts/{idx}/{op}")
-def paytm_acc_op(idx: int, op: str, request: Request, csrf: str = Form(""), u=Depends(current), db: Session = Depends(get_db)):
-    check_csrf(request, csrf)
-    c = db.scalar(select(GatewayCred).where(GatewayCred.user_id == u.id, GatewayCred.gateway == "paytm"))
-    if not c: return go("/gateways")
-    d = sec.dec(c.data_enc); ex = d.get("extra") or []; i = idx - 1     # idx 0 = main account (edit/pause it with the normal buttons)
-    if 0 <= i < len(ex) and op == "delete": ex.pop(i); flash(request, "Account removed.")
-    elif 0 <= i < len(ex) and op == "toggle": ex[i]["on"] = not ex[i].get("on", True); flash(request, "Account " + ("resumed." if ex[i]["on"] else "paused."))
-    else: flash(request, "Account not found.", "err"); return go("/gateways")
-    d["extra"] = ex; c.data_enc = sec.enc(d); audit(db, u.id, "paytm_account_" + op, str(idx)); db.commit(); return go("/gateways")
 @app.post("/gateways/paytm/{action}")
 def paytm_action(action: str, request: Request, csrf: str = Form(""), u=Depends(current), db: Session = Depends(get_db)):
     check_csrf(request, csrf)
@@ -334,11 +307,7 @@ def paytm_action(action: str, request: Request, csrf: str = Form(""), u=Depends(
     c = db.scalar(select(GatewayCred).where(GatewayCred.user_id == u.id, GatewayCred.gateway == "paytm"))
     if not c: flash(request, "Save credentials first.", "err"); return go("/gateways")
     if action == "test":
-        try:
-            full = sec.dec(c.data_enc); res = []
-            for i, a in enumerate(paytm_accounts(full)):
-                o, m = gw.paytm.test(acct_cfg(full, a), c.env); res.append((o, f"#{i+1} {m}"))
-            ok = all(o for o, _ in res); msg = " | ".join(m for _, m in res)[:290]
+        try: ok, msg = gw.paytm.test(sec.dec(c.data_enc), c.env)
         except Exception as e: ok, msg = False, str(e)[:250]
         c.last_test_at, c.last_test_ok, c.last_test_msg = now(), ok, msg; flash(request, msg, "ok" if ok else "err")
     elif action in ("enable", "disable"):
@@ -413,24 +382,6 @@ def cfg_for(db, user_id, gateway, enabled_only=True):
     if enabled_only: q = q.where(GatewayCred.enabled == True)  # noqa
     c = db.scalar(q)
     return (sec.dec(c.data_enc), c.env) if c else (None, None)
-# ---- Paytm multi-account: main account + extra accounts live (encrypted) in the same record: {"shop","upi","mid","extra":[{shop,upi,mid,on}]} ----
-def paytm_accounts(cfg):
-    main = {k: cfg.get(k, "") for k in ("shop", "upi", "mid")}; main["on"] = True
-    return [main] + [dict(a, on=a.get("on", True)) for a in (cfg.get("extra") or [])]
-def acct_cfg(cfg, a):
-    d = {k: v for k, v in cfg.items() if k != "extra"}; d.update({k: a.get(k, "") for k in ("shop", "upi", "mid")}); return d
-def paytm_cfg_for_txn(cfg, t):
-    """The account a payment was created with is found again from the UPI id inside its QR link."""
-    from urllib.parse import urlparse, parse_qs, unquote
-    try: pa = unquote((parse_qs(urlparse(t.qr_data).query).get("pa") or [""])[0]).lower()
-    except Exception: pa = ""
-    for a in paytm_accounts(cfg):
-        if a.get("upi", "").lower() == pa and pa: return acct_cfg(cfg, a)
-    return cfg
-def pick_paytm(db, user_id, cfg):
-    accs = [a for a in paytm_accounts(cfg) if a["on"]]
-    n = db.scalar(select(func.count(Txn.id)).where(Txn.user_id == user_id, Txn.gateway == "paytm")) or 0
-    return acct_cfg(cfg, accs[n % len(accs)])    # round-robin: payment 1 -> account 1, payment 2 -> account 2 ...
 def new_pay_id(db, gateway):
     for _ in range(20):
         pid = gw.paytm.new_order_id() if gateway == "paytm" else "ORD" + secrets.token_hex(8).upper()
@@ -447,7 +398,6 @@ def create_payment(db, user, amount, gateway, merchant_order_id, customer):
     cfg, env = cfg_for(db, user.id, gateway)
     if not cfg: raise HTTPException(400, f"Gateway '{gateway}' not configured/enabled")
     pay_id = new_pay_id(db, gateway)
-    if gateway == "paytm": cfg = pick_paytm(db, user.id, cfg)
     if gateway == "fampay":  # unique-paise adjustment (+1..+99 paise) so each pending order has its own exact amount
         used = set(db.scalars(select(Txn.amount).where(Txn.user_id == user.id, Txn.gateway == "fampay", Txn.status == "PENDING", Txn.expires_at > now())))
         adj = next((a for a in range(0, 100) if amount + a not in used), None)
@@ -460,16 +410,14 @@ def create_payment(db, user, amount, gateway, merchant_order_id, customer):
     db.add(t); db.commit(); return t
 def _refresh(db, t):
     """Only a provider-verified response (order id + amount + success) may set SUCCESS. Idempotent."""
-    late = t.gateway == "fampay" and t.status == "EXPIRED"   # money may arrive a little after the QR expired: keep checking for 30 min
-    if t.status not in ("PENDING", "CREATED") and not late: return t
+    if t.status not in ("PENDING", "CREATED"): return t
     cfg, env = cfg_for(db, t.user_id, t.gateway, enabled_only=False)  # pending/test payments must verify even if the gateway is not enabled
-    if cfg and not (t.expires_at and t.expires_at < now() - timedelta(minutes=30)):   # long-expired: just expire it, no Gmail/Paytm call
+    if cfg:
         try:
             used = set(db.scalars(select(Txn.msg_key).where(Txn.user_id == t.user_id, Txn.gateway == t.gateway, Txn.msg_key != "", Txn.id != t.id)))  # emails that already confirmed another order
-            if t.gateway == "paytm": cfg = paytm_cfg_for_txn(cfg, t)
-            r = gw.get(t.gateway).status(cfg, env, t.pay_id, amount=t.amount, since=t.created, used_keys=used, until=(t.expires_at + timedelta(minutes=30)))
+            r = gw.get(t.gateway).status(cfg, env, t.pay_id, amount=t.amount, since=t.created, used_keys=used)
             t = db.scalar(select(Txn).where(Txn.id == t.id).with_for_update().execution_options(populate_existing=True))
-            if t.status in ("PENDING", "CREATED", "EXPIRED"):
+            if t.status in ("PENDING", "CREATED"):
                 if r["state"] == "SUCCESS":
                     key = r.get("key", "")
                     if key: dup = key in used
@@ -560,7 +508,7 @@ def checkout_php(request: Request, amount: float, api_key: str = "", order_id: s
 @app.get("/pay/{pay_id}")
 def pay_page(pay_id: str, request: Request, db: Session = Depends(get_db)):
     t = _pay(db, pay_id); m = db.get(User, t.user_id)
-    return render(request, "checkout.html", None, t=t, merchant=(m.business_name or m.name), mphoto=(f"/profile/photo/{m.id}?v={m.photo_v}" if m.photo_mime else ""), secs=max(0, int((t.expires_at - now()).total_seconds())), ret=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ""), back=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ("/gateways" if (t.merchant_order_id or "").startswith("TEST-") else "")))
+    return render(request, "checkout.html", None, t=t, merchant=(m.business_name or m.name), mphoto=(f"/profile/photo/{m.id}?v={m.photo_v}" if m.photo_b64 else ""), secs=max(0, int((t.expires_at - now()).total_seconds())), ret=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ""), back=("/subscription" if (t.merchant_order_id or "").startswith("SUB-") else ("/gateways" if (t.merchant_order_id or "").startswith("TEST-") else "")))
 @app.get("/pay/{pay_id}/qr.svg")
 def pay_qr(pay_id: str, db: Session = Depends(get_db)):
     t = _pay(db, pay_id); buf = io.BytesIO(); segno.make(t.qr_data, error="m").save(buf, kind="svg", scale=8, border=2)
@@ -572,8 +520,7 @@ def pay_qr_png(pay_id: str, db: Session = Depends(get_db)):
 @app.get("/pay/{pay_id}/status")
 def pay_status(pay_id: str, db: Session = Depends(get_db)):
     if not sec.rate_ok(f"poll:{pay_id}", 40): raise HTTPException(429, "slow down")
-    t = _pay(db, pay_id)
-    t = refresh(db, t); return {"status": t.status}
+    t = refresh(db, _pay(db, pay_id)); return {"status": t.status}
 @app.api_route("/callback/paytm", methods=["GET", "POST"])
 async def paytm_cb(request: Request, db: Session = Depends(get_db)):
     f = dict(await request.form()) if request.method == "POST" else dict(request.query_params)
